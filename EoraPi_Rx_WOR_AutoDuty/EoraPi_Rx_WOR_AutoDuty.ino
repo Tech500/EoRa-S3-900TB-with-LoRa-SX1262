@@ -16,15 +16,23 @@ struct __attribute__((packed)) Message {
 };
 
 // ---------------------------
+// Function prototypes
+// ---------------------------
 void enterDeepSleep();
 void handleCommand(uint8_t cmd, const char* ts);
 void sendAck();
 void print_reset_reason(int reason);
 
 // ---------------------------
+// Struct-based ACK
+// ---------------------------
 void sendAck() {
-  const char ack[] = "ACK";
-  radio.transmit((uint8_t*)ack, 3);
+  Message ack;
+  ack.command = 0xFF;   // ACK marker
+  memset(ack.timestr, 0, sizeof(ack.timestr));
+
+  radio.transmit((uint8_t*)&ack, sizeof(Message));
+  Serial.println("RX: ACK sent");
 }
 
 // ---------------------------
@@ -47,39 +55,38 @@ void handleCommand(uint8_t cmd, const char* ts) {
 // ---------------------------
 void enterDeepSleep() {
   Serial.println("=== PREPARING FOR DEEP SLEEP ===");
+  Serial.printf("DIO1 pin state before sleep: %d\n", digitalRead(RADIO_DIO1_PIN));
+  Serial.printf("Wake pin (GPIO16) state before sleep: %d\n", digitalRead(WAKE_PIN));
 
-  // 1. Start WOR first
-  radio.startReceiveDutyCycleAuto();
+  initRadio();
+  radio.startReceiveDutyCycleAuto();  // WOR mode
 
-  // 2. Now read the pins
-  Serial.printf("After WOR: DIO1=%d  WAKE_PIN=%d\n",
-    digitalRead(RADIO_DIO1_PIN),
-    digitalRead(WAKE_PIN));
+  Serial.println("Configuring RTC GPIO and deep sleep wake-up...");
 
-  // 3. Wait until WAKE_PIN is HIGH (idle state)
-  while (digitalRead(WAKE_PIN) == LOW) {
-    delay(1);
-  }
-
-  // 4. Arm EXT0 for LOW wake
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_16, 0);
+  // Match 512 behavior: DIO1 idle LOW, wake on RISING
+  rtc_gpio_pulldown_en(WAKE_PIN);                // bias LOW
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_16, 1);  // wake when pin goes HIGH
 
   digitalWrite(BOARD_LED, LED_OFF);
-  Serial.println("Going to deep sleep...");
+  Serial.println("✅ Going to deep sleep now...");
   Serial.flush();
 
-  // 5. Sleep
+  SPI.end();
+
+  gpio_deep_sleep_hold_dis();
+  gpio_hold_dis(GPIO_NUM_16);
+
   esp_deep_sleep_start();
 }
 
 // ---------------------------
 void print_reset_reason(int reason) {
   switch (reason) {
-    case 1:  Serial.println("POWERON_RESET"); break;
-    case 3:  Serial.println("SW_RESET"); break;
-    case 4:  Serial.println("OWDT_RESET"); break;
-    case 5:  Serial.println("DEEPSLEEP_RESET"); break;
-    case 9:  Serial.println("RTCWDT_SYS_RESET"); break;
+    case 1: Serial.println("POWERON_RESET"); break;
+    case 3: Serial.println("SW_RESET"); break;
+    case 4: Serial.println("OWDT_RESET"); break;
+    case 5: Serial.println("DEEPSLEEP_RESET"); break;
+    case 9: Serial.println("RTCWDT_SYS_RESET"); break;
     case 15: Serial.println("RTCWDT_BROWN_OUT_RESET"); break;
     case 16: Serial.println("RTCWDT_RTC_RESET"); break;
     default: Serial.println("UNKNOWN_RESET"); break;
@@ -90,76 +97,74 @@ void print_reset_reason(int reason) {
 // SETUP
 // ---------------------------
 void setup() {
-  initRadio();
+    initBoard();
+    delay(1500);
 
-  Serial.begin(115200);
-  delay(200);
-  Serial.println("\nRX boot");
+    Serial.begin(115200);
+    delay(300);
 
-  pinMode(WAKE_PIN, INPUT);
-  pinMode(RADIO_DIO1_PIN, INPUT);
-  pinMode(CAM_PWR_PIN, OUTPUT);
-  digitalWrite(CAM_PWR_PIN, LOW);
+    gpio_deep_sleep_hold_dis();
+    gpio_hold_dis(GPIO_NUM_16);
 
-   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     Serial.printf("Wake cause: %d\n", cause);
 
-    // SAFE BOOT: only EXT0 wake continues
-    if (cause != ESP_SLEEP_WAKEUP_EXT0) {
-        Serial.println("SAFE BOOT: Not an EXT0 wake. Staying awake.");
-        return;   // Do NOT call initRadio()
+    if (cause != ESP_SLEEP_WAKEUP_EXT0) {    
+        // POWERON path
+        Serial.println("Non-deepsleep reset → entering deep sleep");
+        initRadio();
+        radio.startReceiveDutyCycleAuto();
+        enterDeepSleep();
     }
 
-    Serial.printf("After WOR start: DIO1=%d WAKE_PIN=%d\n",
-      digitalRead(RADIO_DIO1_PIN),
-      digitalRead(WAKE_PIN));
+    // ===============================
+    // EXT0 WAKE → RECEIVE PACKET
+    // ===============================
+    if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+        Serial.println("Woke from LoRa packet");
+        Serial.println("DEEPSLEEP_RESET: Woke from EXT0 on GPIO16");
 
-  
-  // ===============================
-  // DEEP SLEEP WAKE → receive packet
-  // ===============================
- if (cause == ESP_SLEEP_WAKEUP_EXT0) {
-    Serial.println("Woke from LoRa packet");
+        initRadio();
+        radio.startReceive();
 
-    Serial.println("DEEPSLEEP_RESET: Woke from EXT0 on GPIO16");
+        uint32_t start = millis();
+        bool gotPacket = false;
 
-    radio.startReceive(); // full RX mode
+        while (millis() - start < 3000) {
+            uint8_t rxBuf[sizeof(Message)];
+            int state = radio.readData(rxBuf, sizeof(Message));
 
-    uint32_t start = millis();
-    bool gotPacket = false;
+            if (state == RADIOLIB_ERR_NONE) {
+                Message msg;
+                memcpy(&msg, rxBuf, sizeof(Message));
 
-    while (millis() - start < 3000) {
-      uint8_t rxBuf[sizeof(Message)];
-      int state = radio.readData(rxBuf, sizeof(Message));
+                Serial.println("Packet received, sending ACK and handling command");
 
-      if (state == RADIOLIB_ERR_NONE) {
-        Message msg;
-        memcpy(&msg, rxBuf, sizeof(Message));
+                sendAck();
+                handleCommand(msg.command, msg.timestr);
 
-        Serial.println("Packet received, sending ACK and handling command");
+                gotPacket = true;
+                break;
+            }
+            delay(10);
+        }
 
-        sendAck();
-        handleCommand(msg.command, msg.timestr);
+        if (!gotPacket) {
+            Serial.println("No valid packet after wake");
+        }
 
-        gotPacket = true;
-        break;
-      }
-      delay(10);
+        enterDeepSleep();
+        return;
     }
 
-    if (!gotPacket) {
-      Serial.println("No valid packet after wake");
-    }
-
-    enterDeepSleep();
-  }
-
-  // Any other reset → treat like POWERON
-  Serial.println("Non-deepsleep reset → entering deep sleep");
-  initRadio();
-  radio.startReceiveDutyCycleAuto();
-  enterDeepSleep();
+    // ===============================
+    // POWERON / ANY OTHER RESET
+    // ===============================
+    Serial.println("POWERON → entering deep sleep immediately");
+    enterDeepSleep();     // <-- MUST sleep here
+    return;
 }
 
-void loop() {}
 
+
+void loop() {}
