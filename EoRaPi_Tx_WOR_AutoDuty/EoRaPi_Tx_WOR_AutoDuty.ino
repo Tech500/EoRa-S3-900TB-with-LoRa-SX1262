@@ -53,12 +53,21 @@ String linkAddress = "192.168.12.27:80";
 #define CMD_2 2
 
 // ---------------------------
-// Message struct (must match RX)
+// Message struct (must match TX)
 // ---------------------------
 struct __attribute__((packed)) Message {
   uint8_t command;
   char timestr[48];
 };
+
+void sendAck() {
+  Message ack;
+  ack.command = 0xFF;   // ACK marker
+  memset(ack.timestr, 0, sizeof(ack.timestr));
+
+  radio.transmit((uint8_t*)&ack, sizeof(Message));
+  Serial.println("RX: ACK sent");
+}
 
 // ---------------------------
 // Local timestamp (Indianapolis, DST auto)
@@ -74,21 +83,18 @@ String getLocalTimestamp() {
     return String(buf);
 }
 
-
 bool sendWORCommand(uint8_t cmd) {
-    
 
     // ⭐ 1. Send WOR preamble burst
     Serial.println("TX: Sending WOR preamble burst...");
 
-
-    int state = radio.transmit("WOR", 3);   // sends long preamble (configured in initRadio)
+    int state = radio.transmit("WOR", 3);
     if (state != RADIOLIB_ERR_NONE) {
         Serial.printf("TX: preamble transmit failed: %d\n", state);
         return false;
     }
 
-    delay(50);  // small gap
+    delay(50);
 
     Message msg;
     msg.command = cmd;
@@ -105,16 +111,19 @@ bool sendWORCommand(uint8_t cmd) {
         return false;
     }
 
-    // ⭐ 3. Wait for ACK
+    // ⭐ 3. Wait for ACK (struct-based)
     radio.startReceive();
     uint32_t start = millis();
 
     while (millis() - start < 1500) {
-        uint8_t buf[4];
-        int state = radio.readData(buf, sizeof(buf));
+        uint8_t buf[sizeof(Message)];
+        int st = radio.readData(buf, sizeof(Message));
 
-        if (state == RADIOLIB_ERR_NONE) {
-            if (buf[0] == 'A' && buf[1] == 'C' && buf[2] == 'K') {
+        if (st == RADIOLIB_ERR_NONE) {
+            Message ack;
+            memcpy(&ack, buf, sizeof(Message));
+
+            if (ack.command == 0xFF) {
                 Serial.println("TX: ACK received");
                 return true;
             }
@@ -201,29 +210,28 @@ void setup() {
   if (!ok) Serial.println("NTP failed, using fallback");
 
   configTzTime(
-    "EST5EDT,M3.2.0/2,M11.1.0/2",   // Indianapolis timezone with DST
+    "EST5EDT,M3.2.0/2,M11.1.0/2",
     "pool.ntp.org",
     "time.nist.gov"
   );
 
-  // Web route
   server.on("/relay", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send_P(200, PSTR("text/html"), HTML7, processor7);
     sendRequested = true;
-    onceTick.once(120, countdownTrigger);  // 2 minutes
+    onceTick.once(120, countdownTrigger);
   });
 
   server.begin();
 
   pinMode(RADIO_DIO1_PIN, INPUT);
 
-  initRadio();   // ⭐ includes long preamble (512) for WOR wake
+  initRadio();
 
   Serial.println("Tx Ready");
 }
 
 // ===============================
-// LOOP — example ON/OFF cycle
+// LOOP
 // ===============================
 void loop() {
 
@@ -232,24 +240,22 @@ void loop() {
     return;
   }
 
-  // ON request
   if (sendRequested && !cameraIsOn) {
     sendRequested = false;
     worBusy = true;
 
     Serial.println("\nWEB REQUEST RECEIVED → Battery ON");
-     sendWORCommand(CMD_1);
+    sendWORCommand(CMD_1);
 
     cameraIsOn = true;
     worBusy = false;
   }
 
-  // OFF request
   if (countdownExpired) {
     countdownExpired = false;
 
     Serial.println("\nCOUNTDOWN Timer EXPIRED --Battery OFF");
-     sendWORCommand(CMD_2);
+    sendWORCommand(CMD_2);
 
     cameraIsOn = false;
     worBusy = false;
