@@ -7,12 +7,19 @@
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
 
+volatile bool packetDone = false;
+
+void packetHandler() {
+  packetDone = true;
+}
+
 // ---------------------------
 // Message struct (must match TX)
 // ---------------------------
 struct __attribute__((packed)) Message {
-  uint8_t command;
-  char timestr[48];
+  uint8_t type;      // FIRST field
+  uint8_t command;   // SECOND field
+  char timestr[48];  // THIRD field
 };
 
 // ---------------------------
@@ -28,7 +35,8 @@ void print_reset_reason(int reason);
 // ---------------------------
 void sendAck() {
   Message ack;
-  ack.command = 0xFF;   // ACK marker
+  ack.type = 0xFF;     // ACK marker
+  ack.command = 0xFF;  // ACK marker
   memset(ack.timestr, 0, sizeof(ack.timestr));
 
   radio.transmit((uint8_t*)&ack, sizeof(Message));
@@ -36,13 +44,13 @@ void sendAck() {
 }
 
 // ---------------------------
-void handleCommand(uint8_t cmd, const char* ts) {
-  Serial.printf("RX: Command %u at %s\n", cmd, ts);
+void handleCommand(uint8_t command, const char* timeStr) {
+  Serial.printf("RX: Command %u at %s\n", command, timeStr);
 
-  if (cmd == 1) {
+  if (command == 1) {
     Serial.println("RX: Turning camera ON");
     digitalWrite(CAM_PWR_PIN, HIGH);
-  } else if (cmd == 2) {
+  } else if (command == 2) {
     Serial.println("RX: Turning camera OFF");
     digitalWrite(CAM_PWR_PIN, LOW);
   } else {
@@ -97,74 +105,70 @@ void print_reset_reason(int reason) {
 // SETUP
 // ---------------------------
 void setup() {
-    initBoard();
-    delay(1500);
 
-    Serial.begin(115200);
-    delay(300);
+  Serial.begin(115200);
+  delay(300);
 
-    gpio_deep_sleep_hold_dis();
-    gpio_hold_dis(GPIO_NUM_16);
+  gpio_deep_sleep_hold_dis();
+  gpio_hold_dis(GPIO_NUM_16);
 
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    Serial.printf("Wake cause: %d\n", cause);
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  Serial.printf("Wake cause: %d\n", cause);
 
-    if (cause != ESP_SLEEP_WAKEUP_EXT0) {    
-        // POWERON path
-        Serial.println("Non-deepsleep reset → entering deep sleep");
-        initRadio();
-        radio.startReceiveDutyCycleAuto();
-        enterDeepSleep();
-    }
+  if (cause != ESP_SLEEP_WAKEUP_EXT0) {
+    // POWERON path
+    Serial.println("Non-deepsleep reset → entering deep sleep");
+    enterDeepSleep();
+  }
 
-    // ===============================
-    // EXT0 WAKE → RECEIVE PACKET
-    // ===============================
-    if (cause == ESP_SLEEP_WAKEUP_EXT0) {
-        Serial.println("Woke from LoRa packet");
-        Serial.println("DEEPSLEEP_RESET: Woke from EXT0 on GPIO16");
+  bool gotPacket = false;
 
-        initRadio();
-        radio.startReceive();
+  // ===============================
+  // EXT0 WAKE → RECEIVE PACKET
+  // ===============================
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("Woke from LoRa packet");
+    Serial.println("DEEPSLEEP_RESET: Woke from EXT0 on GPIO16");
 
-        uint32_t start = millis();
-        bool gotPacket = false;
+    initRadio();
+    radio.setDio1Action(packetHandler);  // override setFlag with packetHandler
+    radio.startReceive();
+    Serial.println("RX: Ready and listening..."); 
 
-        while (millis() - start < 3000) {
-            uint8_t rxBuf[sizeof(Message)];
-            int state = radio.readData(rxBuf, sizeof(Message));
+    uint32_t start = millis();
+    uint8_t rxBuf[sizeof(Message)];  // ← declare here
+    Message msg;
 
-            if (state == RADIOLIB_ERR_NONE) {
-                Message msg;
-                memcpy(&msg, rxBuf, sizeof(Message));
+    while (millis() - start < 5000) {
+      if (packetDone) {
+        packetDone = false;
+        int state = radio.readData(rxBuf, sizeof(Message));
+        Serial.printf("RX: readData state=%d\n", state);
 
-                Serial.println("Packet received, sending ACK and handling command");
+        if (state == RADIOLIB_ERR_NONE) {
+          memcpy(&msg, rxBuf, sizeof(Message));
+          Serial.printf("RX: msg.command, msg.timestr=%u\n", msg.command, msg.timestr);
 
-                sendAck();
-                handleCommand(msg.command, msg.timestr);
+          if (msg.type == 0xAA) {
+            Serial.println("RX: Wake packet, waiting for command...");
+            radio.startReceive();
+            continue;
+          }
+          if (msg.type == 0xBB) {
+            sendAck();
+            delay(500);
+            handleCommand(msg.command, msg.timestr);
 
-                gotPacket = true;
-                break;
-            }
-            delay(10);
+
+
+            gotPacket = true;
+            break;
+          }
         }
-
-        if (!gotPacket) {
-            Serial.println("No valid packet after wake");
-        }
-
-        enterDeepSleep();
-        return;
+      }
+      delay(10);
     }
-
-    // ===============================
-    // POWERON / ANY OTHER RESET
-    // ===============================
-    Serial.println("POWERON → entering deep sleep immediately");
-    enterDeepSleep();     // <-- MUST sleep here
-    return;
+  }
 }
 
-
-
-void loop() {}
+  void loop() {}
