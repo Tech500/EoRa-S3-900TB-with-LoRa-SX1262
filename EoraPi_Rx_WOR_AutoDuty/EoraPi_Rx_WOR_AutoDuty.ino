@@ -1,3 +1,49 @@
+/*
+ * ============================================================
+ *  Project:  EoRa-S3-900TB WOR AutoDuty Camera Control
+ *  File:     EoraPi_Tx_WOR_AutoDuty.ino  /  EoraPi_Rx_WOR_AutoDuty.ino
+ * ============================================================
+ *
+ *  Author:   William (Tech500)
+ *  Hardware: Ebyte EoRa-S3-900TB (SX1262, ESP32-S3)
+ *  Library:  RadioLib v7.5.0 by Jan Gromes
+ *
+ *  Description:
+ *    LoRa WOR (Wake-On-Radio) duty cycle based camera power
+ *    control system. TX sends a wake packet followed by a
+ *    command packet. RX wakes from deep sleep on WOR interrupt,
+ *    receives the command, controls camera power via GPIO,
+ *    and sends an ACK back to TX.
+ *
+ *  Features:
+ *    - WOR duty cycle deep sleep for low power operation
+ *    - Struct-based messaging with type identification
+ *      (0xAA = wake, 0xBB = command, 0xFF = ACK)
+ *    - Interrupt-driven ACK handshake via radio.setDio1Action()
+ *    - NTP timestamp delivery with Indianapolis DST support
+ *    - AsyncWebServer trigger for remote camera ON/OFF control
+ *    - Ticker-based 120 second auto-off countdown
+ *
+ *  Development Assistance:
+ *    Claude AI (Anthropic - claude.ai)
+ *    Significant debugging and design assistance provided by
+ *    Claude AI throughout development, including:
+ *      - Interrupt handling via radio.setDio1Action()
+ *      - WOR timing and deep sleep synchronization
+ *      - Struct-based packet type identification
+ *      - ACK handshake state machine design
+ *      - ISR safety and watchdog crash resolution
+ *
+ *  References:
+ *    RadioLib Examples: https://github.com/jgromes/RadioLib
+ *    Ebyte EoRa-S3 Examples:
+ *    https://github.com/Tech500/Ebyte-EoRa-S3-900TB-RadioLib-Examples
+ *
+ *  Date:     February 2026
+ * ============================================================
+ */
+
+
 #define EoRa_PI_V1
 #include <Arduino.h>
 #include <RadioLib.h>
@@ -172,3 +218,4 @@ void setup() {
 }
 
   void loop() {}
+
