@@ -4,7 +4,7 @@
  *  File:     EoraPi_Tx_WOR_AutoDuty.ino  /  EoraPi_Rx_WOR_AutoDuty.ino
  * ============================================================
  *
- *  Author:   William (Tech500)
+ *  Author:   William Lucid, AB9NQ (Tech500)
  *  Hardware: Ebyte EoRa-S3-900TB (SX1262, ESP32-S3)
  *  Library:  RadioLib v7.5.0 by Jan Gromes
  *
@@ -39,7 +39,7 @@
  *    Ebyte EoRa-S3 Examples:
  *    https://github.com/Tech500/Ebyte-EoRa-S3-900TB-RadioLib-Examples
  *
- *  Date:     February 2026
+ *  Date:     19 February 2026
  * ============================================================
  */
 
@@ -179,13 +179,13 @@ void setup() {
     initRadio();
     radio.setDio1Action(packetHandler);  // override setFlag with packetHandler
     radio.startReceive();
-    Serial.println("RX: Ready and listening..."); 
+    
 
     uint32_t start = millis();
     uint8_t rxBuf[sizeof(Message)];  // ← declare here
     Message msg;
 
-    while (millis() - start < 5000) {
+   while (millis() - start < 5000) {
       if (packetDone) {
         packetDone = false;
         int state = radio.readData(rxBuf, sizeof(Message));
@@ -193,7 +193,7 @@ void setup() {
 
         if (state == RADIOLIB_ERR_NONE) {
           memcpy(&msg, rxBuf, sizeof(Message));
-          Serial.printf("RX: msg.command, msg.timestr=%u\n", msg.command, msg.timestr);
+          Serial.printf("RX: msg.command=%u msg.timestr=%s\n", msg.command, msg.timestr);
 
           if (msg.type == 0xAA) {
             Serial.println("RX: Wake packet, waiting for command...");
@@ -204,18 +204,24 @@ void setup() {
             sendAck();
             delay(500);
             handleCommand(msg.command, msg.timestr);
-
-
-
             gotPacket = true;
-            break;
+            break;            
           }
         }
       }
       delay(10);
     }
-  }
+
+    if (!gotPacket) {
+      Serial.println("No valid packet after wake");
+    }
+
+    enterDeepSleep();  // ← inside EXT0 block
+    return;            // ← prevents fallthrough
+  }                    // ← closes EXT0 if block
+
+  // catches any other reset cause
+  enterDeepSleep();
 }
 
-  void loop() {}
-
+void loop() {}
