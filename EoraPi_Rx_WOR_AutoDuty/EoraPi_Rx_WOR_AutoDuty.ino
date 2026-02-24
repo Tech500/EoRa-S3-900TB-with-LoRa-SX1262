@@ -1,7 +1,7 @@
 /*
  * ============================================================
  *  Project:  EoRa-S3-900TB WOR AutoDuty Camera Control
- *  File:     EoraPi_Tx_WOR_AutoDuty.ino  /  EoraPi_Rx_WOR_AutoDuty.ino
+ *  File:     EoraPi_Rx_WOR_AutoDuty.ino 
  * ============================================================
  *
  *  Author:   William Lucid, AB9NQ (Tech500)
