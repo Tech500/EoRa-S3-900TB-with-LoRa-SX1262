@@ -1,7 +1,7 @@
 /*
  * ============================================================
  *  Project:  EoRa-S3-900TB WOR AutoDuty Camera Control
- *  File:     EoraPi_Tx_WOR_AutoDuty.ino  /  EoraPi_Rx_WOR_AutoDuty.ino
+ *  File:     EoraPi_Ri_Tx_WOR_AutoDuty.ino  
  * ============================================================
  *
  *  Author:   William Lucid, AB9NQ (Tech500)
@@ -39,7 +39,7 @@
  *    Ebyte EoRa-S3 Examples:
  *    https://github.com/Tech500/Ebyte-EoRa-S3-900TB-RadioLib-Examples
  *
- *  Date:     19 February 2026
+ *  Date:     February 2026
  * ============================================================
  */
 
@@ -219,6 +219,8 @@ void wifi_Start() {
 
 void IRAM_ATTR countdownTrigger() {
     countdownExpired = true;
+    Serial.println("\nCOUNTDOWN Timer EXPIRED --Battery OFF");
+    sendWORCommand(CMD_2);
     cameraIsOn = false;
 }
 
@@ -267,7 +269,7 @@ void loop() {
   }
 
   if (sendRequested) {
-    //Serial.printf("DEBUG: sendRequested=%d cameraIsOn=%d\n", sendRequested, cameraIsOn);
+    Serial.printf("DEBUG: sendRequested=%d cameraIsOn=%d\n", sendRequested, cameraIsOn);
   }
 
   if (sendRequested && !cameraIsOn) {
@@ -279,14 +281,16 @@ void loop() {
     worBusy = false;
   }
 
-if (countdownExpired) {
+  if (countdownExpired) {
     countdownExpired = false;
     worBusy = true;
     Serial.println("\nCOUNTDOWN Timer EXPIRED --Battery OFF");
     sendWORCommand(CMD_2);
-    cameraIsOn = false;  // ← is this here?
+    cameraIsOn = false;
     worBusy = false;
-}
+  }
 
   delay(10);
 }
+
+
